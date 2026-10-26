@@ -1,6 +1,8 @@
+// Conduit change: platform.ts tests for a Windows plugin root.
 import { expect, mock, test } from 'claude-code/testing'
 
 import { BAR, FADE, mask, redact } from './mask'
+import { homeOf, isWindows } from './platform'
 
 const PRIVATE = 'Mail jane.doe@acme.com or call +44 7700 900123. The deal is $4,250.00 for 2026, we used 182k tokens.'
 // The same line with each private span drawn as a bar of its own length.
@@ -246,4 +248,11 @@ test('mask: names only where the text says it is a person', async () => {
   for (const [input, want] of cases) expect(tag(input), input).toBe(want)
   const line = 'From: Jane Doe <jane@x.com>, call +44 7700 900123 about $4,250.00'
   expect(mask(line).length, 'bars keep the line length').toBe(line.length)
+})
+
+test('platform: a Windows plugin root finds the Windows home', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\screen-share\\0.2.1'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  expect(homeOf('/Users/colin/.claude/plugins/cache/conduit-mods/screen-share/0.2.1'), 'home on a Mac').toBe('/Users/colin')
 })

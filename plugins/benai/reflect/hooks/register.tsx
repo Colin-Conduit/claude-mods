@@ -1,6 +1,8 @@
+// Conduit change: runs on Windows as well as macOS: home folder and Open go through ./platform, and a C:\ rules folder is accepted.
 import type { EngineInterface, Register, SessionMessage } from 'claude-code'
 
 import type { Band } from '../types'
+import { homeOf, openWith } from './platform'
 
 const BAND = { plugin: 'reflect', key: 'band' } as const
 
@@ -50,7 +52,7 @@ let off = false
 async function readSwitch($: EngineInterface) {
   let now = false
   try {
-    const path = `${$.plugin.root.split('/.claude/')[0] ?? ''}/.claude/mods/switches.json`
+    const path = `${homeOf($.plugin.root)}/.claude/mods/switches.json`
     if (await $.fs.exists(path)) {
       const json = JSON.parse(String(await $.fs.read(path))) as Record<string, unknown>
       now = json[NAME] === false
@@ -249,12 +251,12 @@ async function saveEverywhere($: EngineInterface, b: Band) {
   return { path, note: '' }
 }
 
-// Turns ~ into the home folder and drops a trailing slash.
+// Turns ~ into the home folder and drops a trailing slash (either kind).
 function expand(p: string) {
   let r = p.trim()
   if (r === '~') r = home
-  else if (r.startsWith('~/')) r = `${home}${r.slice(1)}`
-  return r.replace(/\/+$/, '')
+  else if (/^~[\\/]/.test(r)) r = `${home}${r.slice(1)}`
+  return r.replace(/[\\/]+$/, '')
 }
 
 // The folder rule notes go to: the rules_folder option, else the remembered answer, else ask once.
@@ -270,7 +272,7 @@ async function pickFolder($: EngineInterface) {
     // A cancelled dialog saves nothing.
     return ''
   }
-  if (!answer || answer === CANCEL || (!answer.startsWith('/') && !answer.startsWith('~'))) return ''
+  if (!answer || answer === CANCEL || (!answer.startsWith('/') && !answer.startsWith('~') && !/^[A-Za-z]:[\\/]/.test(answer))) return ''
   const dir = expand(answer)
   if (!dir) return ''
   await $.store.set('folder', answer)
@@ -329,7 +331,7 @@ async function fail($: EngineInterface, b: Band, what: string, err: unknown) {
 export const register: Register = (on, options) => {
   configured = typeof options.rules_folder === 'string' ? options.rules_folder : ''
   on('session.start', async ($, e, next) => {
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    home = homeOf($.plugin.root)
     await $.command.register({ name: 'reflect', description: 'Turn reflect on or off. /reflect folder forgets the remembered rules folder', argumentHint: '[folder]' })
     const saved = await $.store.get('enabled')
     enabled = saved !== false
@@ -426,7 +428,7 @@ export const register: Register = (on, options) => {
 
   on('ui.press', { plugin: 'reflect', element: 'open' }, async ($, e) => {
     const b = await getBand($)
-    if (b?.path) await $.process.run(['open', b.path])
+    if (b?.path) await openWith($, b.path)
     return { element: e.element }
   })
 

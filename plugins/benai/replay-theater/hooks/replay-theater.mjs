@@ -8,6 +8,11 @@
 //
 // Changed by Ben AI (2026-10): added the /mods switchboard support below
 // (turn off and hide via ~/.claude/mods/switches.json). The rest is Anthropic's original.
+//
+// Conduit change: runs on Windows as well as macOS: home folder and delete go through ./platform.mjs,
+// and a Windows path is shown relative to the working folder too.
+
+import { homeOf as homeFrom, removeFile } from "./platform.mjs";
 
 const PANE_ID = "replay-theater";
 const MAX_DIFF_LINES = 12;
@@ -25,7 +30,7 @@ const HIDE_KEY = `${NAME}:hidden`;
 const POLL_MS = 3000;
 const sw = { off: false, hidden: false, sid: "" };
 
-const homeOf = ($) => $.plugin.root.split("/.claude/")[0] || "";
+const homeOf = ($) => homeFrom($.plugin.root);
 const switchesPath = ($) => `${homeOf($)}/.claude/mods/switches.json`;
 
 async function readSwitches($) {
@@ -60,7 +65,6 @@ async function setHidden($, value) {
     const json = await readSwitches($).catch(() => ({}));
     if (value) json[HIDE_KEY] = true;
     else delete json[HIDE_KEY];
-    await $.process.run(["mkdir", "-p", `${homeOf($)}/.claude/mods`]);
     await $.fs.write(switchesPath($), `${JSON.stringify(json, null, 2)}\n`);
   } catch { /* the in-memory flag still changes */ }
   sw.hidden = value;
@@ -72,7 +76,7 @@ async function checkOpen($) {
   const path = `${homeOf($)}/.claude/mods/.open-${NAME}-${sw.sid}`;
   try {
     if (!(await $.fs.exists(path))) return;
-    await $.process.run(["rm", "-f", path]);
+    await removeFile($, path);
     if (sw.off) return;
     const opened = await openReplay($);
     if (!opened) $.ui.toast("Replay Theater: no edits in the last turn yet.");
@@ -86,7 +90,7 @@ async function poll($) {
 
 function relPath(cwd, path) {
   if (!path) return "(unknown file)";
-  if (cwd && path.startsWith(cwd + "/")) return path.slice(cwd.length + 1);
+  if (cwd && (path.startsWith(cwd + "/") || path.startsWith(cwd + "\\"))) return path.slice(cwd.length + 1);
   return path;
 }
 

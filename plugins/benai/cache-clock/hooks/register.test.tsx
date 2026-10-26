@@ -1,4 +1,17 @@
+// Conduit change: the cache length now comes from the transcript read in TypeScript (no python3), so tests seed a transcript.
 import { expect, mock, test } from 'claude-code/testing'
+
+import { homeOf, isWindows } from './platform'
+import { tailOf, ttlIn } from './ttl'
+
+const TRANSCRIPT = '/.claude/projects/-Users-test-vault/sid.jsonl'
+/** One transcript line: a reply that wrote its prompt to the cache with this length. */
+const reply = (ttl: '5m' | '1h', isSidechain = false) =>
+  JSON.stringify({
+    type: 'assistant',
+    isSidechain,
+    message: { usage: { cache_creation: { ephemeral_5m_input_tokens: ttl === '5m' ? 900 : 0, ephemeral_1h_input_tokens: ttl === '1h' ? 900 : 0 } } },
+  })
 
 for (const surface of ['desktop', 'terminal'] as const) {
   test(`counts down, goes cold, offers a handoff on a big chat (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
@@ -11,9 +24,15 @@ for (const surface of ['desktop', 'terminal'] as const) {
     const clock = mock.clock(on, { now: 1_000_000 })
     on('session.id', async () => ({ value: 'sid' }) as never)
     on('session.usage', async () => ({ value: { context: { tokens: 182_000, window: 1_000_000 } } }) as never)
-    on('process.run', async () => ({ value: { exitCode: 0, stdout: '5m\n', stderr: '' } }) as never)
-    on('fs.exists', async ($, e) => ({ value: (e as { path: string }).path in files }) as never)
-    on('fs.read', async ($, e) => ({ value: files[(e as { path: string }).path] ?? '' }) as never)
+    // This chat's transcript: the newest main reply wrote a 5 min cache.
+    const transcript = [JSON.stringify({ type: 'user' }), reply('1h'), reply('5m'), JSON.stringify({ type: 'user' })].join('\n')
+    const isTranscript = (e: unknown) => (e as { path: string }).path.endsWith(TRANSCRIPT)
+    on('fs.list', async ($, e) =>
+      ({ value: (e as { path: string }).path.endsWith('/.claude/projects') ? [{ name: '-Users-test-vault', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : [] }) as never,
+    )
+    on('fs.stat', async () => ({ value: { kind: 'file', size: transcript.length, mtimeMs: 0, isLink: false } }) as never)
+    on('fs.exists', async ($, e) => ({ value: isTranscript(e) || (e as { path: string }).path in files }) as never)
+    on('fs.read', async ($, e) => ({ value: isTranscript(e) ? transcript : (files[(e as { path: string }).path] ?? '') }) as never)
     on('fs.write', async ($, e) => {
       const { path, text } = e as { path: string; text: string }
       files[path] = text
@@ -376,3 +395,87 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(said, '/keepwarm says it is off').toContain('Turn it on with /mods')
   })
 }
+
+for (const surface of ['desktop', 'terminal'] as const) {
+  test(`a transcript over 4 MiB is read from its tail and finds a 1 hour cache (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
+    const runs: (readonly string[])[] = []
+    on('session.start', async ($, e) => ({ cwd: e.cwd }) as never)
+    on('turn.start', async () => ({}) as never)
+    on('command.register', async () => ({ value: undefined }) as never)
+    const clock = mock.clock(on, { now: 1_000_000 })
+    on('session.id', async () => ({ value: 'sid' }) as never)
+    on('session.usage', async () => ({ value: { context: { tokens: 182_000, window: 1_000_000 } } }) as never)
+    on('fs.list', async ($, e) =>
+      ({ value: (e as { path: string }).path.endsWith('/.claude/projects') ? [{ name: '-Users-test-vault', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : [] }) as never,
+    )
+    on('fs.stat', async () => ({ value: { kind: 'file', size: 9_000_000, mtimeMs: 0, isLink: false } }) as never)
+    on('fs.exists', async ($, e) => ({ value: (e as { path: string }).path.endsWith(TRANSCRIPT) }) as never)
+    on('fs.read', async ($, e) => {
+      if ((e as { path: string }).path.endsWith(TRANSCRIPT)) throw new Error('over 4 MiB')
+      return { value: '' } as never
+    })
+    on('fs.write', async () => ({ value: undefined }) as never)
+    on('process.run', async ($, e) => {
+      const { argv } = e as { argv: readonly string[] }
+      runs.push(argv)
+      // The tail starts inside a line; a subagent's newer 5 min reply does not count.
+      const out = argv[0] === 'tail' ? ['ephemeral_5m_input_tokens":1}}}', reply('1h'), reply('5m', true), ''].join('\n') : ''
+      return { value: { exitCode: 0, stdout: out, stderr: '' } } as never
+    })
+    on('store.get', async () => ({ value: undefined }) as never)
+    on('store.set', async () => ({ value: undefined }) as never)
+    on('turn.complete', async () => ({ text: '' }) as never)
+    on('ui.render', { component: 'AbovePrompt' }, async ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>REST</Text>
+    })
+    const props = { isWorking: false, hasSurvey: false, maxRows: 10, bodyColumns: 100 } as never
+    await $.session.start({ source: 'startup', cwd: '/Users/test/vault', surface, isInteractive: true } as never)
+    await $.turn.complete({ answer: '' } as never)
+    await clock.settle()
+    await clock.advance(30_000)
+    const v = await $.ui.mount({ plugin: 'cache-clock', surface, component: 'AbovePrompt', props })
+    expect(await v.find({ text: /1 hour cache, as Anthropic's last reply set it/ }), 'the 1 hour length is found').toBeDefined()
+    expect(await v.find({ text: /59:30/ }), '59:30 left after 30 s of a 1 hour cache').toBeDefined()
+    const tail = runs.find(a => a[0] === 'tail')
+    expect(tail?.slice(0, 3), 'the last 3 MB through tail').toEqual(['tail', '-c', '3000000'])
+    expect(tail?.[3] ?? '', 'of this chat').toContain(TRANSCRIPT)
+    expect(runs.some(a => a[0] === 'python3'), 'no python3').toBe(false)
+  })
+}
+
+test('platform: a Windows plugin root is Windows, and home is found on either slash', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\cache-clock\\0.3.1'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  expect(isWindows('/Users/colin/.claude/plugins/cache/conduit-mods/cache-clock/0.3.1'), 'a Mac path is not').toBe(false)
+  expect(homeOf('/Users/colin/.claude/plugins/cache/conduit-mods/cache-clock/0.3.1'), 'home on a Mac').toBe('/Users/colin')
+})
+
+test('ttl: a big transcript on Windows is read through PowerShell, with the path in an environment variable', async () => {
+  const runs: { argv: readonly string[]; env?: Record<string, string> }[] = []
+  const path = 'C:\\Users\\colin/.claude/projects/C--Users-colin-vault/sid.jsonl'
+  const $ = {
+    plugin: { name: 'cache-clock', root: 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\cache-clock\\0.3.1' },
+    fs: { stat: async () => ({ kind: 'file', size: 9_000_000, mtimeMs: 0, isLink: false }) },
+    process: {
+      run: async (argv: readonly string[], init?: { env?: Record<string, string> }) => {
+        runs.push({ argv, env: init?.env })
+        return { exitCode: 0, stdout: `cut line\r\n${reply('1h')}\r\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+      },
+    },
+  }
+  const text = await tailOf($ as never, path)
+  expect(runs[0]?.argv.slice(0, 4), 'PowerShell, no profile').toEqual(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command'])
+  expect(runs[0]?.argv[4] ?? '', 'the script reads the path from the environment, never from its own text').toContain('$env:CACHE_CLOCK_FILE')
+  expect(runs[0]?.argv[4] ?? '', 'no double quotes for Windows to mangle').not.toContain('"')
+  expect(runs[0]?.env, 'the path goes in the environment').toEqual({ CACHE_CLOCK_FILE: path })
+  expect(text.startsWith('cut line'), 'the cut first line is dropped').toBe(false)
+  expect(ttlIn(text), 'CRLF lines still parse').toBe('1h')
+})
+
+test('ttl: the newest main-chat reply decides; subagent replies and broken lines are skipped', async () => {
+  expect(ttlIn([reply('1h'), reply('5m'), '{broken', reply('1h', true)].join('\n')), 'newest main reply wins').toBe('5m')
+  expect(ttlIn([reply('5m'), JSON.stringify({ type: 'assistant', message: { usage: {} } })].join('\n')), 'a reply that wrote nothing is skipped').toBe('5m')
+  expect(ttlIn(JSON.stringify({ type: 'user' })), 'no reply yet').toBe('unknown')
+})

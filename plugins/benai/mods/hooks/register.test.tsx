@@ -1,5 +1,8 @@
 // Conduit change: brain-dump left the known list, so tests use reflect and a six-row table.
+// Conduit change: platform.ts tests for a Windows plugin root.
 import { expect, mock, test } from 'claude-code/testing'
+
+import { homeOf, isWindows, listSeparator } from './platform'
 
 const props = { title: 'Mods', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as never
 
@@ -272,3 +275,13 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await v.find({ text: 'Zeta Notes is off in every chat.' }), 'note').toBeDefined()
   })
 }
+
+test('platform: a Windows plugin root finds home and splits plugin folders on ;', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\mods\\0.3.2'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  expect('C:\\mods\\a;D:\\b'.split(listSeparator(root)), 'C: stays whole').toEqual(['C:\\mods\\a', 'D:\\b'])
+  const mac = '/Users/colin/.claude/plugins/cache/conduit-mods/mods/0.3.2'
+  expect(homeOf(mac), 'home on a Mac').toBe('/Users/colin')
+  expect(listSeparator(mac), ': on a Mac').toBe(':')
+})

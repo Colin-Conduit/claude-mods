@@ -1,5 +1,8 @@
 // Conduit change: removed the brain-dump row from the known list; it is not in this repo.
+// Conduit change: runs on Windows as well as macOS: home folder from ./platform, CLAUDE_CODE_PLUGIN_DIRS split on ; there, folder names on either slash.
 import type { EngineInterface, Register } from 'claude-code'
+
+import { homeOf as homeFrom, listSeparator } from './platform'
 
 // The Mods pane: one row per knowledge-work mod, with an On/Off switch that works
 // in every chat (switches.json). Mods that draw something also get Shown/Hidden,
@@ -39,7 +42,7 @@ let cache: { at: number; rows: Row[] } | null = null
 
 const NOT_SWITCHABLE = 'Not switchable yet. Ask Claude: add the /mods switch to this mod.'
 
-const homeOf = ($: EngineInterface) => $.plugin.root.split('/.claude/')[0] ?? ''
+const homeOf = ($: EngineInterface) => homeFrom($.plugin.root)
 const switchesPath = ($: EngineInterface) => `${homeOf($)}/.claude/mods/switches.json`
 
 function cut(s: string, n: number) {
@@ -51,7 +54,6 @@ async function log($: EngineInterface, where: string, err: unknown) {
   try {
     const dir = `${homeOf($)}/.claude/mods-logs`
     const file = `${dir}/mods.log`
-    await $.process.run(['mkdir', '-p', dir])
     let old = ''
     try {
       old = String(await $.fs.read(file))
@@ -93,7 +95,6 @@ const isOff = (json: Record<string, unknown>, name: string) => json[name] === fa
 const isHidden = (json: Record<string, unknown>, name: string) => json[`${name}:hidden`] === true
 
 async function save($: EngineInterface, json: Record<string, unknown>) {
-  await $.process.run(['mkdir', '-p', `${homeOf($)}/.claude/mods`])
   const text = `${JSON.stringify(json, null, 2)}\n`
   await $.fs.write(switchesPath($), text)
   lastRaw = text
@@ -157,7 +158,7 @@ async function cacheDirs($: EngineInterface, home: string) {
   return out
 }
 
-// CLAUDE_CODE_PLUGIN_DIRS: folders split by ':', '~' meaning the home folder.
+// CLAUDE_CODE_PLUGIN_DIRS: folders split by ':' (';' on Windows, where ':' is in C:\), '~' meaning the home folder.
 async function envDirs($: EngineInterface) {
   let raw: string | undefined
   try {
@@ -168,11 +169,11 @@ async function envDirs($: EngineInterface) {
   if (!raw) return []
   const home = homeOf($)
   return raw
-    .split(':')
+    .split(listSeparator($.plugin.root))
     .map(x => x.trim())
     .filter(Boolean)
-    .map(x => (x === '~' ? home : x.startsWith('~/') ? `${home}${x.slice(1)}` : x))
-    .map(x => x.replace(/\/+$/, ''))
+    .map(x => (x === '~' ? home : /^~[\\/]/.test(x) ? `${home}${x.slice(1)}` : x))
+    .map(x => x.replace(/[\\/]+$/, ''))
 }
 
 function titleCase(name: string) {
@@ -215,7 +216,7 @@ async function inspect($: EngineInterface, dir: string, chatOnly: boolean): Prom
   const hooksJson = parse(await readText($, `${dir}/hooks/hooks.json`))
   if (!('modules' in hooksJson)) return null
   const plugin = parse(pluginRaw)
-  const folder = dir.split('/').pop() ?? ''
+  const folder = dir.split(/[\\/]/).pop() ?? ''
   const name = typeof plugin.name === 'string' && plugin.name ? plugin.name : folder
   if (!name || name === 'mods') return null
   const source = await hooksSource($, dir)

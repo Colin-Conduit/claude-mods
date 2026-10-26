@@ -9,49 +9,49 @@
       "name": "cache-clock",
       "source": "./plugins/benai/cache-clock",
       "description": "Counts down until the chat's prompt cache goes cold, above the prompt. When a big chat goes cold, offers a handoff to a fresh chat. Keep warm pings the cache in the background so it does not go cold",
-      "version": "0.3.0"
+      "version": "0.3.1"
     },
     {
       "name": "chat-inventory",
       "source": "./plugins/benai/chat-inventory",
       "description": "A side pane, In this chat, that lists the to-do list, connectors, context files and skills this chat used",
-      "version": "0.2.0"
+      "version": "0.2.1"
     },
     {
       "name": "handoff",
       "source": "./plugins/benai/handoff",
       "description": "At 250k tokens, offers Refresh: writes a handoff of the whole chat, shows the steps with progress bars, then copies it or starts a new chat with it. Logs every run to ~/.claude/handoffs/handoff.log and saves a draft first",
-      "version": "0.1.1"
+      "version": "0.1.2"
     },
     {
       "name": "helper-desk",
       "source": "./plugins/benai/helper-desk",
       "description": "Helper Desk: a purple task progress bar above the prompt that moves as each to-do item is done, and a side pane with one live card per subagent",
-      "version": "0.4.0"
+      "version": "0.4.1"
     },
     {
       "name": "mods",
       "source": "./plugins/benai/mods",
-      "description": "A Mods pane that finds every mod on this Mac by itself, also the ones installed from a marketplace, turns each one on or off in every chat, and opens the side-pane ones",
-      "version": "0.3.1"
+      "description": "A Mods pane that finds every mod on this computer by itself, also the ones installed from a marketplace, turns each one on or off in every chat, and opens the side-pane ones",
+      "version": "0.3.2"
     },
     {
       "name": "reflect",
       "source": "./plugins/benai/reflect",
       "description": "When you correct Claude, offers to save the fix as a lasting rule in CLAUDE.md or in a rules folder you choose",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "name": "replay-theater",
       "source": "./plugins/benai/replay-theater",
       "description": "Replay Theater: step through the file edits Claude made in the last turn, one diff at a time.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "name": "screen-share",
       "source": "./plugins/benai/screen-share",
       "description": "/screen-share draws emails, phone numbers, money amounts and names as shaded bars on screen for recording, while Claude still reads the real data",
-      "version": "0.2.0"
+      "version": "0.2.1"
     }
   ]
 }

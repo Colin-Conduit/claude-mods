@@ -58,8 +58,11 @@ Then load them:
 
 ## Notes
 
-- cache-clock needs `python3`.
-- handoff's Copy and Open buttons are Mac only. They use `pbcopy` and `open`.
+- The mods work on Mac and Windows. Linux should work too, but we have not tried it.
+- Nothing extra to install. cache-clock no longer needs `python3`.
+- On Windows, handoff's Copy button can fall back to PowerShell, which comes with Windows. cache-clock also uses PowerShell to read a chat log bigger than 4 MB.
+- handoff's Start new chat opens a `claude://` link, so the Claude desktop app must be installed on that computer.
+- On Linux, Open uses `xdg-open`, and Copy falls back to `wl-copy` or `xclip`.
 - helper-desk adds an instruction to every chat to use its plan tool instead of the built-in to-do list.
 - reflect writes to `~/.claude/CLAUDE.md`, or your rules folder, only when you press Save.
 - cache-clock's handoff button needs handoff installed.

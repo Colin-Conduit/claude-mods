@@ -1,6 +1,6 @@
 {
   "name": "reflect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "When you correct Claude, offers to save the fix as a lasting rule in CLAUDE.md or in a rules folder you choose",
   "author": {
     "name": "Ben AI",

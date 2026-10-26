@@ -1,6 +1,8 @@
+// Conduit change: runs on Windows as well as macOS: the home folder comes from ./platform, split on either slash.
 import type { EngineInterface, Register } from 'claude-code'
 
 import { BAR, FADE, mask, maskDeep } from './mask'
+import { homeOf } from './platform'
 
 // Screen-Share Mode: /screen-share turns it on or off. (/share cannot be used: it
 // is the built-in /bug's other name, and the engine refuses to register it.) While on, the transcript rows
@@ -31,7 +33,7 @@ let off = false
 async function readSwitch($: EngineInterface) {
   let now = false
   try {
-    const path = `${$.plugin.root.split('/.claude/')[0] ?? ''}/.claude/mods/switches.json`
+    const path = `${homeOf($.plugin.root)}/.claude/mods/switches.json`
     if (await $.fs.exists(path)) {
       const json = JSON.parse(String(await $.fs.read(path))) as Record<string, unknown>
       now = json[NAME] === false
@@ -121,7 +123,7 @@ export const register: Register = on => {
     })
     try {
       sid = await $.session.id()
-      home = $.plugin.root.split('/.claude/')[0] ?? ''
+      home = homeOf($.plugin.root)
       await readSwitch($).catch(() => undefined)
       $.clock.every(3000, () => {
         void readSwitch($).catch(() => undefined)

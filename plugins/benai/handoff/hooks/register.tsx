@@ -1,7 +1,9 @@
 // Conduit change: removed the Claude Pet hand-off; Start new chat always uses the app link.
-import type { EngineInterface, Register, SessionMessage } from 'claude-code'
+// Conduit change: runs on Windows as well as macOS: home folder, delete, copy and open go through ./platform.
+import type { EngineInterface, Register, RenderSurface, SessionMessage } from 'claude-code'
 
 import type { Panel, Step } from '../types'
+import { clipboard, homeOf, openWith, osOf, pasteKey, removeFile } from './platform'
 
 // One key for the whole band: offer, steps, buttons.
 const PANEL = { plugin: 'handoff', key: 'panel' } as const
@@ -57,7 +59,7 @@ let hidden = false
 // The offer was asked for (Show or /refresh): it stays whatever the token count.
 let forced = false
 
-const switchesPath = ($: EngineInterface) => `${$.plugin.root.split('/.claude/')[0] ?? ''}/.claude/mods/switches.json`
+const switchesPath = ($: EngineInterface) => `${homeOf($.plugin.root)}/.claude/mods/switches.json`
 
 async function readSwitches($: EngineInterface): Promise<Record<string, unknown>> {
   const path = switchesPath($)
@@ -101,7 +103,6 @@ async function setHidden($: EngineInterface, value: boolean) {
     const json = await readSwitches($)
     if (value) json[HIDE_KEY] = true
     else delete json[HIDE_KEY]
-    await $.process.run(['mkdir', '-p', `${home}/.claude/mods`])
     await $.fs.write(switchesPath($), `${JSON.stringify(json, null, 2)}\n`)
   } catch (err) {
     await log($, `save hidden failed: ${String(err)}`)
@@ -125,7 +126,7 @@ async function checkOpen($: EngineInterface) {
   if (!sid) return
   const path = `${home}/.claude/mods/.open-${NAME}-${sid}`
   if (!(await $.fs.exists(path).catch(() => false))) return
-  await $.process.run(['rm', '-f', path])
+  await removeFile($, path)
   if (!off) await showOffer($)
 }
 
@@ -189,21 +190,21 @@ async function step<T>($: EngineInterface, i: number, work: () => Promise<T>, de
 
 type Gathered = { messages: SessionMessage[]; tools: number; files: string[]; skills: string[]; links: string[] }
 
-const PATH_RE = /(?:~|\/Users)\/[^\s'"`<>()|;,*]+/g
+const PATH_RE = /(?:~|\/Users|[A-Za-z]:[\\/]Users)[\\/][^\s'"`<>()|;,*]+/g
 const URL_RE = /https?:\/\/[^\s'"`<>()\]]+/g
 
 async function gatherFiles($: EngineInterface, messages: SessionMessage[]) {
   const count = new Map<string, number>()
   const add = (raw: string, weight: number) => {
     let p = raw.replace(/[.:]+$/, '')
-    if (p.startsWith('~/')) p = home + p.slice(1)
-    if (p.includes('/.claude/projects/') || p.includes('/tool-results/') || p.startsWith('/private/tmp') || p.startsWith('/tmp')) return
+    if (/^~[\\/]/.test(p)) p = home + p.slice(1)
+    if (/[\\/]\.claude[\\/]projects[\\/]|[\\/]tool-results[\\/]|^\/private\/tmp|^\/tmp|[\\/]AppData[\\/]Local[\\/]Temp[\\/]/i.test(p)) return
     count.set(p, (count.get(p) ?? 0) + weight)
   }
   for (const m of messages) {
     for (const u of m.toolUses) {
       const fp = u.input.file_path ?? u.input.notebook_path ?? u.input.path
-      if (typeof fp === 'string' && fp.startsWith('/')) add(fp, u.tool === 'Read' ? 2 : 3)
+      if (typeof fp === 'string' && (fp.startsWith('/') || /^[A-Za-z]:[\\/]/.test(fp))) add(fp, u.tool === 'Read' ? 2 : 3)
       if (u.tool === 'Bash' && typeof u.input.command === 'string') {
         for (const hit of u.input.command.match(PATH_RE) ?? []) add(hit, 1)
       }
@@ -380,7 +381,6 @@ async function run($: EngineInterface) {
       f => `${plural(f.skills.length, 'skill')}, ${plural(f.links.length, 'link')}`,
     )
     const g: Gathered = { messages, tools, files, ...found }
-    await $.process.run(['mkdir', '-p', `${home}/.claude/handoffs`])
     draftPath = `${home}/.claude/handoffs/${await stamp($)}-draft.md`
     const draft = redact(draftText(cwd, g))
     await $.fs.write(draftPath, draft)
@@ -406,14 +406,13 @@ async function run($: EngineInterface) {
       4,
       async () => {
         const dir = `${home}/.claude/handoffs`
-        await $.process.run(['mkdir', '-p', dir])
         const path = `${dir}/${await stamp($)}-${slug(text)}.md`
         await $.fs.write(path, `${text}\n`)
         const back = String(await $.fs.read(path))
         if (back.trim() !== text) throw new Error('the saved file does not match')
         return path
       },
-      p => tilde(p).split('/').pop() ?? '',
+      p => tilde(p).split(/[\\/]/).pop() ?? '',
     )
     handoffText = text
     handoffPath = saved
@@ -422,7 +421,7 @@ async function run($: EngineInterface) {
     if (sid) await $.store.set(`last:${sid}`, { path: saved })
     await log($, `ok ${tilde(saved)} ${text.split(/\s+/).length} words in ${Math.round(writeMs / 1000)} s`)
     // The full handoff replaces the draft.
-    if (draftPath) await $.process.run(['rm', '-f', draftPath])
+    if (draftPath) await removeFile($, draftPath)
   } catch (err) {
     const p = await getPanel($)
     const steps = (p?.steps ?? freshSteps()).map((s, k) => (k === running && s.status === 'run' ? { ...s, status: 'fail' as const } : s))
@@ -449,18 +448,21 @@ async function note($: EngineInterface, text: string) {
   if (p) await setPanel($, { ...p, note: text })
 }
 
-async function copy($: EngineInterface) {
+// The engine's clipboard first; the system's own copy command when that surface has none.
+async function copy($: EngineInterface, surface: RenderSurface) {
   if (!handoffText) return
-  const r = await $.process.run(['pbcopy'], { stdin: handoffText })
-  await note($, r.exitCode === 0 ? 'Copied. Paste it into a new chat with ⌘V.' : 'Copy failed. Use Open file instead.')
+  const os = await osOf($)
+  let ok = (await $.ui.copy({ text: handoffText, surface }).catch(() => undefined))?.isCopied === true
+  if (!ok) ok = (await clipboard($, handoffText).catch(() => undefined))?.exitCode === 0
+  await note($, ok ? `Copied. Paste it into a new chat with ${pasteKey(os)}.` : 'Copy failed. Use Open file instead.')
 }
 
 // The app's own link fills a new chat and you press Return.
 async function startNew($: EngineInterface) {
   if (!handoffText) return
   const url = `claude://code/new?q=${encodeURIComponent(handoffText)}`
-  const r = await $.process.run(['open', url])
-  await note($, r.exitCode === 0 ? 'A new chat is filled in with the handoff. Press Return there to start it.' : 'The new chat did not open. Use Copy handoff prompt instead.')
+  const r = await openWith($, url).catch(() => undefined)
+  await note($, r?.exitCode === 0 ? 'A new chat is filled in with the handoff. Press Return there to start it.' : 'The new chat did not open. Use Copy handoff prompt instead.')
 }
 
 async function checkOffer($: EngineInterface) {
@@ -468,7 +470,7 @@ async function checkOffer($: EngineInterface) {
   // Cache Clock (another mod) asks for a handoff by leaving this file.
   const request = `${home}/.claude/handoffs/.request-${sid}`
   if (sid && (await $.fs.exists(request).catch(() => false))) {
-    await $.process.run(['rm', '-f', request])
+    await removeFile($, request)
     await log($, 'asked by Cache Clock')
     void run($).catch(() => undefined)
     return
@@ -525,7 +527,7 @@ function bar(progress: number, status: Step['status']) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     sid = await $.session.id()
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    home = homeOf($.plugin.root)
     await poll($).catch(() => undefined)
     $.clock.every(3000, () => {
       void poll($).catch(() => undefined)
@@ -609,7 +611,7 @@ export const register: Register = on => {
     return { element: e.element }
   })
   on('ui.press', { plugin: 'handoff', element: 'copy' }, async ($, e) => {
-    await copy($)
+    await copy($, e.surface)
     return { element: e.element }
   })
   on('ui.press', { plugin: 'handoff', element: 'start' }, async ($, e) => {
@@ -617,7 +619,7 @@ export const register: Register = on => {
     return { element: e.element }
   })
   on('ui.press', { plugin: 'handoff', element: 'open' }, async ($, e) => {
-    if (handoffPath) await $.process.run(['open', handoffPath])
+    if (handoffPath) await openWith($, handoffPath)
     return { element: e.element }
   })
   on('ui.press', { plugin: 'handoff', element: 'close' }, async ($, e) => {
