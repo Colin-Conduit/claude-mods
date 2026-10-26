@@ -1,9 +1,11 @@
+// Conduit change: runs on Windows as well as macOS: home folder and delete go through ./platform, and file paths match on either slash.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionMessage } from 'claude-code'
 
 import type { CallRow, ConnectorRow, FileRow, Inventory, Plan, PlanStep, SkillRow } from '../types'
 import { CONNECTOR_NAMES, connectorName as nameOf, splitTool } from './connectors'
 import { LOGOS } from './logos'
+import { homeOf, removeFile } from './platform'
 
 const PLUGIN = 'chat-inventory'
 const NAME = 'chat-inventory'
@@ -83,7 +85,8 @@ const clip = (s: string, n = 60) => {
   return flat.length > n ? `${flat.slice(0, n - 1)}…` : flat
 }
 
-const base = (p: string) => (/^[~/.]/.test(p) && p.includes('/') ? p.slice(p.replace(/\/+$/, '').lastIndexOf('/') + 1) : p)
+const lastSlash = (p: string) => Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+const base = (p: string) => (/^([~/.]|[A-Za-z]:[\\/])/.test(p) && /[\\/]/.test(p) ? p.slice(lastSlash(p.replace(/[\\/]+$/, '')) + 1) : p)
 
 /** The friendly connector name for an MCP tool, or '' when the tool is not a connector's. */
 function connectorName(tool: string): string {
@@ -173,10 +176,10 @@ function hitsOf(tool: string, input: Record<string, unknown>): Hit[] {
   if (tool === 'Read' && typeof input.file_path === 'string') {
     const fp = input.file_path
     // A skill file read on purpose is a skill, named for its folder.
-    const skill = /\/([^/]+)\/SKILL\.md$/.exec(fp)
+    const skill = /[\\/]([^\\/]+)[\\/]SKILL\.md$/.exec(fp)
     if (skill) return [{ kind: 'skill', name: skill[1]! }]
     // Claude's own spill files (big tool results, temp copies) are not context the person gave it.
-    if (/\/tool-results\/|^\/private\/tmp\/|^\/tmp\/|\/\.claude\/projects\/[^/]+\/[0-9a-f-]{36}\//.test(fp)) return []
+    if (/[\\/]tool-results[\\/]|^\/private\/tmp\/|^\/tmp\/|[\\/]AppData[\\/]Local[\\/]Temp[\\/]|[\\/]\.claude[\\/]projects[\\/][^\\/]+[\\/][0-9a-f-]{36}[\\/]/i.test(fp)) return []
     return [{ kind: 'file', name: fp }]
   }
   if (tool === 'Skill' && typeof input.skill === 'string' && input.skill) return [{ kind: 'skill', name: input.skill.replace(/^\//, '') }]
@@ -199,7 +202,7 @@ async function logError($: EngineInterface, where: string, err: unknown) {
     try {
       old = String(await $.fs.read(path))
     } catch {
-      await $.process.run(['mkdir', '-p', `${home}/.claude/mods-logs`])
+      // No log yet: $.fs.write makes the file and its folder.
     }
     const line = `${new Date(await $.clock.now()).toISOString()} ${where}: ${String(err instanceof Error ? err.message : err)}\n`
     await $.fs.write(path, old + line)
@@ -405,7 +408,7 @@ async function isSkill($: EngineInterface, name: string) {
   return cmds.some(c => c.name === name && c.source === 'user')
 }
 
-const skillOfPath = (p: string) => /\/([^/]+)\/SKILL\.md$/.exec(p)?.[1] ?? ''
+const skillOfPath = (p: string) => /[\\/]([^\\/]+)[\\/]SKILL\.md$/.exec(p)?.[1] ?? ''
 
 /** Memory files the chat loaded at start. A SKILL.md among them is a skill, always loaded. */
 async function loadMemoryFiles($: EngineInterface) {
@@ -536,7 +539,7 @@ async function readSwitch($: EngineInterface) {
     const sid = await $.session.id()
     const req = `${home}/.claude/mods/.open-${NAME}-${sid}`
     if (await $.fs.exists(req)) {
-      await $.process.run(['rm', '-f', req])
+      await removeFile($, req)
       if (!off) await openPane($)
     }
   } catch (err) {
@@ -550,7 +553,6 @@ async function setHidden($: EngineInterface, value: boolean) {
     const json = await readSwitches($)
     if (value) json[HIDE_KEY] = true
     else delete json[HIDE_KEY]
-    await $.process.run(['mkdir', '-p', `${home}/.claude/mods`])
     await $.fs.write(switchesPath(), `${JSON.stringify(json, null, 2)}\n`)
   } catch (err) {
     await logError($, 'save hidden', err)
@@ -600,7 +602,7 @@ const KNOWN_KEYS = [...new Set([...Object.keys(LOGOS), ...[...CONNECTOR_NAMES, .
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    home = homeOf($.plugin.root)
     await $.command.register({ name: 'inventory', description: 'Show the connectors, files and skills this chat used', immediate: true })
     await readSwitch($)
     if (!switchTimer)
@@ -799,11 +801,11 @@ export const register: Register = on => {
 
     const files = newest(list.files)
     const fileRow = (f: FileRow) => {
-          const cut = f.path.lastIndexOf('/')
+          const cut = lastSlash(f.path)
           const name = f.path.slice(cut + 1)
           const full = tilde(cut > 0 ? f.path.slice(0, cut) : '/')
           // One line per file: long folders wrapped and drew over the row above on desktop.
-          const parts = full.split('/').filter(Boolean)
+          const parts = full.split(/[\\/]/).filter(Boolean)
           const folder = full.length > 28 && parts.length > 1 ? `…/${parts[parts.length - 1]}` : full
           return row(
             `f:${f.path}`,

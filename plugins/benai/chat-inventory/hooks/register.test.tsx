@@ -1,4 +1,7 @@
+// Conduit change: adds Windows path tests for the file and skill lists, and for platform.ts.
 import { expect, mock, test } from 'claude-code/testing'
+
+import { homeOf, isWindows, removeFile } from './platform'
 
 type On = Parameters<NonNullable<Parameters<typeof test>[2]>>[1]
 
@@ -123,6 +126,22 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ text: /Google Workspace/ }), 'gwsx is not gws').toBeUndefined()
     expect(await ui.find({ text: /^\/?foo$|foo/ }), 'the skill is named for its folder').toBeDefined()
     expect(await ui.find({ text: /SKILL\.md/ }), 'not a context file').toBeUndefined()
+  })
+
+  test(`Windows paths: a SKILL.md read is a skill, a temp file is dropped, a file lists by name (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
+    const clock = setup(on, {}, [], [])
+    await $.session.start({ source: 'startup', cwd: 'C:\\Users\\test\\vault', surface, isInteractive: true } as never)
+    await clock.settle()
+    const call = $.tool.call as unknown as (input: Record<string, unknown>) => Promise<unknown>
+    await call({ tool: 'Read', tool_use_id: 'w1', file_path: 'C:\\Users\\test\\.claude\\skills\\winskill\\SKILL.md' })
+    await call({ tool: 'Read', tool_use_id: 'w2', file_path: 'C:\\Users\\test\\AppData\\Local\\Temp\\spill.txt' })
+    await call({ tool: 'Read', tool_use_id: 'w3', file_path: 'C:\\Users\\test\\vault\\notes.md' })
+    await clock.settle()
+
+    const ui = await $.ui.mount({ plugin: 'chat-inventory', surface, component: 'Pane', requestId: 'chat-inventory', props: paneProps })
+    expect(await ui.find({ text: /winskill/ }), 'the skill is named for its folder').toBeDefined()
+    expect(await ui.find({ text: /spill\.txt/ }), 'the temp file is not context').toBeUndefined()
+    expect(await ui.find({ text: /^notes\.md/ }), 'the file shows by its name').toBeDefined()
   })
 
   test(`pressing a connector shows its calls; pressing again hides them (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
@@ -386,3 +405,18 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await ui.find({ type: 'Text', text: /^Files read$/ }), 'Files read line').toBeDefined()
   })
 }
+
+test('platform: a Windows plugin root finds home and deletes with del', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\chat-inventory\\0.2.1'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  const runs: (readonly string[])[] = []
+  const run = async (argv: readonly string[]) => {
+    runs.push(argv)
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  await removeFile({ plugin: { name: 'chat-inventory', root }, process: { run } } as never, 'C:\\Users\\colin/.claude/mods/.open-chat-inventory-sid')
+  expect(runs[0], 'del, backslashes').toEqual(['cmd.exe', '/d', '/c', 'del', '/f', '/q', 'C:\\Users\\colin\\.claude\\mods\\.open-chat-inventory-sid'])
+  await removeFile({ plugin: { name: 'chat-inventory', root: '/Users/colin/.claude/plugins/cache/x' }, process: { run } } as never, '/Users/colin/.claude/mods/.open-chat-inventory-sid')
+  expect(runs[1], 'rm -f on a Mac').toEqual(['rm', '-f', '/Users/colin/.claude/mods/.open-chat-inventory-sid'])
+})

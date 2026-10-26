@@ -1,7 +1,9 @@
+// Conduit change: runs on Windows as well as macOS: home folder and delete go through ./platform, and file names split on either slash.
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { BandPlan, Helper, HelperPhase, PlanStatus, Step, StepKind } from '../types'
 import { connectorName, splitTool } from './connectors'
+import { homeOf, removeFile } from './platform'
 
 const NAME = 'helper-desk'
 const PANE = 'helpers'
@@ -160,14 +162,13 @@ function toolWords(tool: string, connector: string) {
   return words.join(' ')
 }
 
-const base = (p: string) => p.split('/').filter(Boolean).pop() ?? p
+const base = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p
 const cut = (t: string, n: number) => (n <= 0 ? '' : t.length > n ? `${t.slice(0, Math.max(0, n - 1))}…` : t)
 const oneLine = (t: string) => t.replace(/\s+/g, ' ').trim()
 
 function folder(p: string) {
-  const parts = p.split('/')
-  parts.pop()
-  const dir = parts.join('/')
+  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  const dir = cut < 0 ? '' : p.slice(0, cut)
   return home && dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir
 }
 
@@ -290,8 +291,8 @@ async function log($: EngineInterface, line: string) {
     const dir = `${home}/.claude/mods-logs`
     const path = `${dir}/${NAME}.log`
     let old = ''
+    // $.fs.write makes the folder when the log is new.
     if (await $.fs.exists(path).catch(() => false)) old = String(await $.fs.read(path))
-    else await $.process.run(['mkdir', '-p', dir])
     await $.fs.write(path, `${old}${new Date().toISOString()} ${line}\n`)
   } catch {
     // Logging must never break the session.
@@ -492,7 +493,6 @@ async function setHidden($: EngineInterface, value: boolean) {
     const json = await readSwitches($)
     if (value) json[HIDE_KEY] = true
     else delete json[HIDE_KEY]
-    await $.process.run(['mkdir', '-p', `${home}/.claude/mods`])
     await $.fs.write(switchesPath(), `${JSON.stringify(json, null, 2)}\n`)
   } catch (err) {
     await log($, `save hidden: ${String(err)}`)
@@ -511,7 +511,7 @@ async function checkOpen($: EngineInterface) {
   if (!sessionId) return
   const path = `${home}/.claude/mods/.open-${NAME}-${sessionId}`
   if (!(await $.fs.exists(path).catch(() => false))) return
-  await $.process.run(['rm', '-f', path])
+  await removeFile($, path)
   if (!off) await openPane($)
 }
 
@@ -581,7 +581,6 @@ function withNudge<R>(r: R): R {
   const had = (r as { context?: readonly string[] }).context ?? []
   return { ...r, context: [...had, note] }
 }
-let stateDirMade = false
 
 const planPath = () => `${home}/.claude/mods-state/plan-${sessionId}.json`
 const doneCount = (steps: { status: PlanStatus }[]) => steps.filter(st => st.status === 'completed').length
@@ -590,10 +589,6 @@ const isStatus = (v: unknown): v is PlanStatus => typeof v === 'string' && (STAT
 async function writePlan($: EngineInterface) {
   if (!plan || !sessionId || !home) return
   try {
-    if (!stateDirMade) {
-      await $.process.run(['mkdir', '-p', `${home}/.claude/mods-state`])
-      stateDirMade = true
-    }
     const body = {
       title: plan.title,
       steps: plan.steps.map(st => ({ text: st.text, status: st.status, ...(st.doneAt ? { doneAt: st.doneAt } : {}) })),
@@ -937,7 +932,7 @@ ${body}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    home = homeOf($.plugin.root)
     sessionId = await $.session.id().catch(() => '')
     await $.command.register({ name: 'helpers', description: 'Show the Helper Desk: the task progress bar and one live card per subagent', immediate: true })
     await $.tool.register({

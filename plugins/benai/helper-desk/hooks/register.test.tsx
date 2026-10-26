@@ -1,4 +1,7 @@
+// Conduit change: the plan folder is made by $.fs.write (no mkdir), and Windows paths and platform.ts have tests.
 import { expect, mock, test } from 'claude-code/testing'
+
+import { homeOf, isWindows, removeFile } from './platform'
 
 /** The `on` a test body is handed. */
 type On = Parameters<NonNullable<Parameters<typeof test>[2]>>[1]
@@ -380,6 +383,18 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(await v.find({ text: /Build the landing page/ }), 'the card draws').toBeDefined()
   })
 
+  test(`a Windows file path reads as its name on the card (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
+    const { clock } = rig(on, {})
+    await $.session.start({ source: 'startup', cwd: 'C:\\Users\\test\\vault', surface, isInteractive: true } as never)
+    const callTool = $.tool.call as unknown as (input: unknown) => Promise<unknown>
+    await $.agent.spawn({ tool_use_id: 'spawn1', prompt: 'Do the job.', description: 'Read the report', subagentType: 'Explore', model: 'haiku' } as never)
+    await clock.settle()
+    await callTool({ tool: 'Read', tool_use_id: 'w1', file_path: 'C:\\Users\\test\\vault\\report.md', agentId: 'agent-a1' } as never)
+    await clock.advance(5_000)
+    const v = await $.ui.mount({ plugin: 'helper-desk', surface, component: 'Pane', requestId: 'helpers', props: props() })
+    expect(await v.find({ text: /Step 1 · Reading report\.md/ }), 'the file name, not the whole path').toBeDefined()
+  })
+
   test(`the plan tool writes the plan file and draws "2 of 4" (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
     const files: Record<string, string> = {}
     const { clock, ran } = rig(on, files)
@@ -390,7 +405,7 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(String(said.result), 'tool answer').toBe('Plan saved: 2 of 4 steps done.')
     const path = planFile(files)
     expect(path, 'plan file written').toBeDefined()
-    expect(ran.some(a => a[0] === 'mkdir' && String(a[a.length - 1]).endsWith('/.claude/mods-state')), 'state folder made').toBe(true)
+    expect(ran.some(a => a[0] === 'mkdir'), 'no mkdir: $.fs.write makes the state folder').toBe(false)
     const saved = JSON.parse(files[path!]!) as { title: string; steps: { text: string; status: string; doneAt?: string }[]; updatedAt: string }
     expect(saved.title, 'title saved').toBe('Make the deck')
     expect(saved.steps.map(st => st.status), 'statuses saved').toEqual(['completed', 'completed', 'in_progress', 'pending'])
@@ -525,4 +540,19 @@ test('the plan tool sits in front, and work without a plan gets one nudge', { ti
   const after = await callTool({ tool: 'Read', tool_use_id: 'r1', file_path: '/x' })
   expect(after.context ?? [], 'plan made: quiet').toHaveLength(0)
   expect(planFile(files), 'plan file written for Chat Inventory').toBeDefined()
+})
+
+test('platform: a Windows plugin root finds home and deletes with del', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\helper-desk\\0.4.1'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  const runs: (readonly string[])[] = []
+  const run = async (argv: readonly string[]) => {
+    runs.push(argv)
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  await removeFile({ plugin: { name: 'helper-desk', root }, process: { run } } as never, 'C:\\Users\\colin/.claude/mods/.open-helper-desk-s1')
+  expect(runs[0], 'del, backslashes').toEqual(['cmd.exe', '/d', '/c', 'del', '/f', '/q', 'C:\\Users\\colin\\.claude\\mods\\.open-helper-desk-s1'])
+  await removeFile({ plugin: { name: 'helper-desk', root: '/Users/colin/.claude/plugins/cache/x' }, process: { run } } as never, '/Users/colin/.claude/mods/.open-helper-desk-s1')
+  expect(runs[1], 'rm -f on a Mac').toEqual(['rm', '-f', '/Users/colin/.claude/mods/.open-helper-desk-s1'])
 })

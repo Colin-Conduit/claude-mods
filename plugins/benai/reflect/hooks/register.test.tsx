@@ -1,5 +1,8 @@
+// Conduit change: a typed Windows folder, Open on a Mac, and platform.ts on a Windows root have tests.
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
+
+import { homeOf, isWindows, openWith } from './platform'
 
 type On = Parameters<TestBody>[1]
 
@@ -18,6 +21,8 @@ type World = {
   claudeSeed?: string
   /** What switches.json holds for the /mods switchboard, under whatever home the mod uses. */
   switches?: string
+  /** Every command the mod ran. */
+  runs?: string[][]
 }
 
 // Every $ call the mod makes, answered here, so no real file is ever read or written.
@@ -71,7 +76,12 @@ function mockAll(on: On, w: World) {
     w.files[path] = text
     return { value: undefined } as never
   })
-  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }) as never)
+  on('process.run', async ($, e) => {
+    const argv = [...(e as { argv: readonly string[] }).argv]
+    w.runs?.push(argv)
+    // A Mac: uname names Darwin.
+    return { value: { exitCode: 0, stdout: argv[0] === 'uname' ? 'Darwin\n' : '', stderr: '' } } as never
+  })
   on('store.get', async ($, e) => ({ value: w.store[(e as { key: string }).key] }) as never)
   on('store.set', async ($, e) => {
     const { key, value } = e as { key: string; value: unknown }
@@ -186,6 +196,22 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect('/Users/test/notes/rules/no-em-dashes-in-newsletters.md' in w.files, 'written to the typed path').toBe(true)
   })
 
+  test(`a typed Windows folder is accepted, and Open opens the saved file (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
+    const w = { ...world(), answer: 'C:\\Users\\test\\rules\\', runs: [] as string[][] }
+    mockAll(on, w)
+    const clock = mock.clock(on, { now: Date.UTC(2026, 9, 15, 12) })
+    await $.session.start({ source: 'startup', cwd: 'C:\\Users\\test\\vault', surface, isInteractive: true } as never)
+    await offer($, clock, 'No, I said never use em dashes.', 't1')
+    let v = await $.ui.mount({ plugin: 'reflect', surface, component: 'AbovePrompt', props })
+    await v.press({ key: 'vault' })
+    const saved = 'C:\\Users\\test\\rules/no-em-dashes-in-newsletters.md'
+    // On Linux the engine reads C:\\ as a relative path and puts the working folder before it; on Windows it is the path itself.
+    expect(Object.keys(w.files).some(k => k.endsWith(saved)), 'written under the C: folder, trailing backslash dropped').toBe(true)
+    v = await $.ui.mount({ plugin: 'reflect', surface, component: 'AbovePrompt', props })
+    await v.press({ key: 'open' })
+    expect(w.runs.some(a => a[0] === 'open' && a[1] === saved), 'Open uses open on a Mac').toBe(true)
+  })
+
   test(`rules_folder unset: cancelling the folder dialog saves nothing (${surface})`, { timeoutMs: 30000 }, async ($, on) => {
     const w = world()
     mockAll(on, w)
@@ -265,3 +291,16 @@ for (const surface of ['desktop', 'terminal'] as const) {
     expect(w.drafts, 'no new draft while off').toBe(1)
   })
 }
+
+test('platform: a Windows plugin root finds home and opens files with the shell handler', async () => {
+  const root = 'C:\\Users\\colin\\.claude\\plugins\\cache\\conduit-mods\\reflect\\0.1.1'
+  expect(isWindows(root), 'a drive letter is Windows').toBe(true)
+  expect(homeOf(root), 'home on Windows').toBe('C:\\Users\\colin')
+  const runs: (readonly string[])[] = []
+  const run = async (argv: readonly string[]) => {
+    runs.push(argv)
+    return { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  await openWith({ plugin: { name: 'reflect', root }, process: { run } } as never, 'C:\\Users\\colin/Documents/rules/x.md')
+  expect(runs, 'no uname, one rundll32 call with backslashes').toEqual([['rundll32.exe', 'url.dll,FileProtocolHandler', 'C:\\Users\\colin\\Documents\\rules\\x.md']])
+})

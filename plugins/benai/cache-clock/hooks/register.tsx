@@ -1,6 +1,9 @@
+// Conduit change: runs on Windows as well as macOS: reads the cache length in TypeScript (no python3, no bin/ folder) and finds home with ./platform.
 import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
 
 import type { Clock, Warm } from '../types'
+import { homeOf } from './platform'
+import { tailOf, ttlIn } from './ttl'
 
 const CLOCK = { plugin: 'cache-clock', key: 'clock' } as const
 const WARM = { plugin: 'cache-clock', key: 'warm' } as const
@@ -46,7 +49,7 @@ const HIDE_KEY = `${NAME}:hidden`
 let off = false
 let hidden = false
 
-const switchesPath = ($: EngineInterface) => `${$.plugin.root.split('/.claude/')[0] ?? ''}/.claude/mods/switches.json`
+const switchesPath = ($: EngineInterface) => `${homeOf($.plugin.root)}/.claude/mods/switches.json`
 
 async function readSwitches($: EngineInterface): Promise<Record<string, unknown>> {
   const path = switchesPath($)
@@ -89,7 +92,6 @@ async function setHidden($: EngineInterface, value: boolean) {
     const json = await readSwitches($)
     if (value) json[HIDE_KEY] = true
     else delete json[HIDE_KEY]
-    await $.process.run(['mkdir', '-p', `${home}/.claude/mods`])
     await $.fs.write(switchesPath($), `${JSON.stringify(json, null, 2)}\n`)
   } catch (err) {
     await log($, `save hidden failed: ${String(err)}`)
@@ -254,13 +256,32 @@ async function log($: EngineInterface, line: string) {
   }
 }
 
+let transcript = ''
+
+/** This chat's transcript, ~/.claude/projects/<folder>/<session id>.jsonl, or '' before it is written. */
+async function transcriptPath($: EngineInterface) {
+  // A /clear starts a new session id, so the remembered path must be this one's.
+  if (transcript.endsWith(`${sid}.jsonl`) && (await $.fs.exists(transcript).catch(() => false))) return transcript
+  const projects = `${home}/.claude/projects`
+  for (const d of await $.fs.list(projects).catch(() => [])) {
+    if (d.kind !== 'dir') continue
+    const path = `${projects}/${d.name}/${sid}.jsonl`
+    if (await $.fs.exists(path).catch(() => false)) return (transcript = path)
+  }
+  return ''
+}
+
 // Reads which cache length this chat's replies were written with (5 min or 1 hour).
 async function detect($: EngineInterface) {
   if (!sid) return
-  const r = await $.process.run(['python3', `${$.plugin.root}/bin/ttl.py`, sid])
-  const out = r.stdout.trim()
-  if (out === '5m' || out === '1h') detected = out
-  else if (r.exitCode !== 0) await log($, `ttl check failed: ${r.stderr.slice(0, 200)}`)
+  try {
+    const path = await transcriptPath($)
+    if (!path) return
+    const out = ttlIn(await tailOf($, path))
+    if (out !== 'unknown') detected = out
+  } catch (err) {
+    await log($, `ttl check failed: ${String(err).slice(0, 200)}`)
+  }
 }
 
 // A main-chat reply just ended: the cache is warm again from now.
@@ -293,7 +314,7 @@ async function handoff($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     sid = await $.session.id()
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    home = homeOf($.plugin.root)
     // The 60 s demo is for one chat only. Older versions saved it for every chat, so clear that.
     demo = false
     if ((await $.store.get('demo').catch(() => undefined)) === true) {

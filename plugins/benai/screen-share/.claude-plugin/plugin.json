@@ -1,6 +1,6 @@
 {
   "name": "screen-share",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "/screen-share draws emails, phone numbers, money amounts and names as shaded bars on screen for recording, while Claude still reads the real data",
   "author": {
     "name": "Ben AI",

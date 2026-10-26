@@ -1,6 +1,6 @@
 {
   "name": "cache-clock",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Counts down until the chat's prompt cache goes cold, above the prompt. When a big chat goes cold, offers a handoff to a fresh chat. Keep warm pings the cache in the background so it does not go cold",
   "author": {
     "name": "Ben AI",
