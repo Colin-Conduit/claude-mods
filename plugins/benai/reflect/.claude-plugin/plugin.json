@@ -1,0 +1,18 @@
+{
+  "name": "reflect",
+  "version": "0.1.0",
+  "description": "When you correct Claude, offers to save the fix as a lasting rule in CLAUDE.md or in a rules folder you choose",
+  "author": {
+    "name": "Ben AI",
+    "url": "https://www.benai.co"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "rules_folder": {
+      "type": "string",
+      "title": "Rules folder",
+      "description": "The folder where Save to vault writes rule notes, for example ~/Documents/rules. Leave empty to be asked once and have the answer remembered.",
+      "default": ""
+    }
+  }
+}
