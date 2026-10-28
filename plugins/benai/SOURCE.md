@@ -23,6 +23,7 @@ We left out brain-dump.
   - reflect 0.1.1: Open uses the right opener for the system, and a typed rules folder like `C:\Users\you\rules` is accepted.
   - replay-theater 0.1.1: a Windows path shows relative to the working folder. Its first tests are in `hooks/replay-theater.test.ts`.
   - screen-share 0.2.1: home folder only.
+- helper-desk 0.4.2 (2026-10-28): where an organization manages Claude Code (managed settings on the computer, or a Team or Enterprise plan), the built-in `cc-plugin-sec-default` plugin runs first and sends `prompt.compose` on past every plugin a person installs. So the plan section never reached the model, and Claude Code said "its prompt.compose hook was skipped". When a main-chat turn ends without that hook running, the same guidance now goes beside each prompt instead, without the "no TodoWrite" line. TodoWrite lists still feed the bar, as before. Tests cover both cases.
 - Each changed file starts with a one-line "Conduit change" comment.
 
 Everything else is as received.

@@ -27,7 +27,7 @@
       "name": "helper-desk",
       "source": "./plugins/benai/helper-desk",
       "description": "Helper Desk: a purple task progress bar above the prompt that moves as each to-do item is done, and a side pane with one live card per subagent",
-      "version": "0.4.1"
+      "version": "0.4.2"
     },
     {
       "name": "mods",
