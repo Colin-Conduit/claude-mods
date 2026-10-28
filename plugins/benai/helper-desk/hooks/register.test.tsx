@@ -1,5 +1,5 @@
 // Conduit change: the plan folder is made by $.fs.write (no mkdir), and Windows paths and platform.ts have tests.
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type Plugin } from 'claude-code/testing'
 
 import { homeOf, isWindows, removeFile } from './platform'
 
@@ -540,6 +540,77 @@ test('the plan tool sits in front, and work without a plan gets one nudge', { ti
   const after = await callTool({ tool: 'Read', tool_use_id: 'r1', file_path: '/x' })
   expect(after.context ?? [], 'plan made: quiet').toHaveLength(0)
   expect(planFile(files), 'plan file written for Chat Inventory').toBeDefined()
+})
+
+// Conduit change: where an organization manages Claude Code, the built-in cc-plugin-sec-default sits above every
+// installed plugin and answers prompt.compose with next.to(e, 'append'), so this plugin's hook never runs.
+// SEC_DEFAULT stands for it: a prepend-tier plugin with that one hook, as the built-in registers it.
+const SEC_DEFAULT = {
+  name: 'cc-plugin-sec-default',
+  tier: 'prepend',
+  register(on) {
+    on('prompt.compose', ($, e, next) => next.to(e, 'append'))
+  },
+} as const satisfies Plugin
+const mainUsage = { input_tokens: 100, output_tokens: 50, model: 'claude-opus-5-5' }
+/** A prompt the person typed and sent with Enter. */
+const typed = (text: string) => ({ text, wait: false, origin: { kind: 'composer' as const } })
+const facts = { model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['desktop'], tools: ['mcp__helper-desk__plan'], outputStyle: null, traits: [] }
+
+/** The context each prompt reached the engine with. */
+function submits(on: On) {
+  const sent: string[][] = []
+  on('prompt.submit', async ($, e) => {
+    sent.push([...(e.context ?? [])])
+    return { text: e.text, context: e.context } as never
+  })
+  return sent
+}
+
+test('a plan section another plugin sends on past rides beside the next prompt instead', { plugins: [SEC_DEFAULT], timeoutMs: 30000 }, async ($, on) => {
+  const files: Record<string, string> = {}
+  const { clock } = rig(on, files)
+  const sent = submits(on)
+  on('prompt.compose', async () => ({ sections: [{ id: 'intro', text: 'You are Claude Code.', scope: 'shared' }] }) as never)
+  await $.session.start({ source: 'startup', cwd: 'C:\\Users\\test\\vault', surface: 'desktop', isInteractive: true } as never)
+
+  await $.prompt.submit(typed('Build the deck'))
+  const composed = await $.prompt.compose(facts as never)
+  expect(composed.sections.map(s => s.id), 'sent on past helper-desk').toEqual(['intro'])
+  // A subagent's turn says nothing about the main chat's prompt.
+  await $.turn.complete({ answer: 'ok', agentId: 'agent-a1', reason: 'answer', durationMs: 1, isAborted: false, turnId: 't0', usage: mainUsage } as never)
+  await $.prompt.submit(typed('Still the deck'))
+  expect(sent[0], 'first prompt: nothing known yet').toHaveLength(0)
+  expect(sent[1], 'a subagent turn is no sign').toHaveLength(0)
+
+  await $.turn.complete({ answer: 'ok', reason: 'answer', durationMs: 1, isAborted: false, turnId: 't1', usage: mainUsage } as never)
+  await $.prompt.submit(typed('Now the summary'))
+  const note = (sent[2] ?? []).join(' ')
+  expect(note, 'the guidance comes beside the prompt').toContain('mcp__helper-desk__plan')
+  expect(note, 'no claim that TodoWrite is missing').not.toContain('no TodoWrite')
+  await $.prompt.submit(typed('And the email'))
+  expect(sent[3], 'every prompt after, once each').toHaveLength(1)
+
+  // Turned off in /mods: nothing beside the prompt.
+  files['*/.claude/mods/switches.json'] = JSON.stringify({ 'helper-desk': false })
+  await clock.advance(3_100)
+  await $.prompt.submit(typed('One more'))
+  expect(sent[4], 'off: nothing beside the prompt').toHaveLength(0)
+})
+
+test('a plan section that lands adds nothing beside the prompt', { timeoutMs: 30000 }, async ($, on) => {
+  rig(on, {})
+  const sent = submits(on)
+  on('prompt.compose', async () => ({ sections: [{ id: 'intro', text: 'You are Claude Code.', scope: 'shared' }] }) as never)
+  await $.session.start({ source: 'startup', cwd: '/Users/test/vault', surface: 'desktop', isInteractive: true } as never)
+
+  await $.prompt.submit(typed('Build the deck'))
+  const composed = await $.prompt.compose(facts as never)
+  expect(composed.sections.map(s => s.id), 'the section is added last').toEqual(['intro', 'helper-desk:plan'])
+  expect(composed.sections[1]?.scope, 'after the cache boundary').toBe('session')
+  await $.turn.complete({ answer: 'ok', reason: 'answer', durationMs: 1, isAborted: false, turnId: 't1', usage: mainUsage } as never)
+  await $.prompt.submit(typed('Now the summary'))
+  expect(sent[1], 'no copy beside the prompt').toHaveLength(0)
 })
 
 test('platform: a Windows plugin root finds home and deletes with del', async () => {

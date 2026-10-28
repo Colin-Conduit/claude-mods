@@ -1,4 +1,5 @@
 // Conduit change: runs on Windows as well as macOS: home folder and delete go through ./platform, and file names split on either slash.
+// Conduit change: where the plan section is passed over (cc-plugin-sec-default), the plan guidance rides beside each prompt instead.
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { BandPlan, Helper, HelperPhase, PlanStatus, Step, StepKind } from '../types'
@@ -524,12 +525,19 @@ async function switchPoll($: EngineInterface) {
 
 const PLAN_TOOL = 'mcp__helper-desk__plan'
 const MIRRORED = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate'])
-const PLAN_PROMPT =
-  'Your to-do list is the mcp__helper-desk__plan tool (this app has no TodoWrite). The user watches it as a progress bar. ' +
+const PLAN_RULES =
   'For any task that needs 2 or more steps or tool calls, call it first, before other tools, with every step in order and the first one in_progress. ' +
   'Call it again with the full list each time a step finishes or a new one starts. Mark the last step completed before your final answer. ' +
   'When you write a plan for the user to approve, save its steps with the tool too, all pending, so the plan shows in the bar and the Chat Inventory to-do list. ' +
   'A step that launches subagents is one step. Skip it only for a one-line answer with no tool calls.'
+const PLAN_PROMPT =
+  'Your to-do list is the mcp__helper-desk__plan tool (this app has no TodoWrite). The user watches it as a progress bar. ' + PLAN_RULES
+// Conduit change: where an organization manages Claude Code, the built-in cc-plugin-sec-default sends prompt.compose
+// on past every plugin a person installs, so PLAN_PROMPT never reaches the model. This copy goes beside each prompt instead.
+// It makes no claim about TodoWrite, which those apps may offer: a TodoWrite list feeds the same bar.
+const PLAN_NOTE =
+  'Helper Desk: your to-do list is the mcp__helper-desk__plan tool (a TodoWrite list also feeds the bar). The user watches it as a progress bar. ' +
+  PLAN_RULES
 // Main-chat tool calls in a turn before the nudge to make a plan.
 const NUDGE_AFTER = 1
 // Tool calls since the last plan update before the nudge to tick it.
@@ -563,6 +571,9 @@ let turnPlanned = false
 let nudged = false
 let sincePlan = 0
 let staleNudged = false
+// Whether this load's prompt.compose hook ever ran, and whether a main-chat turn ended without it.
+let composeRan = false
+let composePassed = false
 
 // A short reminder after a tool's result, read by the model only.
 function withNudge<R>(r: R): R {
@@ -1074,11 +1085,15 @@ export const register: Register = on => {
     nudged = false
     sincePlan = 0
     staleNudged = false
-    return next(e)
+    // Conduit change: the section below was passed over, so the guidance goes beside the prompt.
+    if (!composePassed || off || e.command) return next(e)
+    return next({ ...e, context: [...(e.context ?? []), PLAN_NOTE] })
   })
 
   // A short system-prompt section, only while the mod is on.
   on('prompt.compose', async ($, e, next) => {
+    composeRan = true
+    composePassed = false
     const r = await next(e)
     if (off || e.traits.includes('teammate') || e.traits.includes('bare')) return r
     return { sections: [...r.sections, { id: 'helper-desk:plan', text: PLAN_PROMPT, scope: 'session' as const }] }
@@ -1098,6 +1113,11 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     const id = e.agentId
+    // Conduit change: a main-chat turn that reached the model with no prompt.compose of ours means a plugin above sent it on past us.
+    if (!id && e.usage && !composeRan && !composePassed) {
+      composePassed = true
+      void log($, 'prompt.compose was passed over; the plan guidance goes beside each prompt instead').catch(() => undefined)
+    }
     if (id && !off && helpers.some(hp => hp.id === id)) {
       const failed = e.reason === 'error' || e.reason === 'refusal' || e.isAborted
       void finish($, id, failed ? 'failed' : 'done', e.usage ?? null).catch(err => log($, `turn: ${String(err)}`))
